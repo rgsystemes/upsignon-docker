@@ -1,0 +1,136 @@
+services:
+  postgres:
+    image: postgres:15.13
+    container_name: uso.postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${db_user}
+      POSTGRES_PASSWORD: ${db_password}
+      POSTGRES_DB: pro
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - 5432
+
+  pg_backup:
+    image: postgres:15.13
+    container_name: uso.pg_backup
+    environment:
+      db_user: ${db_user}
+      db_password: ${db_password}
+      db_backup_frequency: ${db_backup_frequency}
+      max_db_backups: ${max_db_backups}
+    volumes:
+      - ${db_backups_path}:/backup
+    command: >
+      bash -u -c "sleep 10m
+        while true; do
+          PGPASSWORD=${db_password} pg_dump -h postgres -U ${db_user} -Fc pro > /backup/$(date +%Y-%m-%d-%H-%M-%S).dump
+          echo \"Backup done at $(date +%Y-%m-%d_%H:%M:%S)\"
+          ls -1 /backup/*.dump | head -n -${max_db_backups} | xargs rm -f
+          sleep ${db_backup_frequency}
+        done"
+    depends_on:
+      - postgres
+
+  server:
+    image: ghcr.io/rgsystemes/upsignon-docker/server:latest
+    container_name: uso.server
+    pull_policy: always
+    restart: always
+    environment:
+      db_host: postgres
+      db_port: 5432
+      db_name: pro
+      db_user: ${db_user}
+      db_pass: ${db_password}
+      pro_api_public_hostname: ${server_domain}
+      pro_session_secret: ${session_secret}
+      pro_server_port: 3000
+      perso_server_url: https://app.upsignon.eu
+      http_proxy: ${http_proxy}
+      use_postfix: false
+      pro_node_env: production
+      smtp_host: ${smtp_host}
+      smtp_port: ${smtp_port}
+      smtp_user: ${smtp_user}
+      smtp_password: ${smtp_password}
+      smtp_sending_user: ${smtp_sending_user}
+      smtp_allow_invalid_crt: ${smtp_allow_invalid_crt}
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.server.loadbalancer.server.port=3000
+      - traefik.http.routers.server.rule=Host(`${server_domain}`) && PathPrefix(`/`)
+      - traefik.http.routers.server.entrypoints=websecure
+      - traefik.http.routers.server.tls=true
+      - traefik.http.routers.server.middlewares=server-ip,server-headers
+      - traefik.http.middlewares.server-headers.headers.customrequestheaders.X-Real-IP=true
+      - traefik.http.middlewares.server-headers.headers.customrequestheaders.X-Forwarded-Proto=https
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.X-Frame-Options=DENY
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.X-XSS-Protection=1; mode=block
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.X-DNS-Prefetch-Control=off
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.X-Download-Options=noopen
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.X-Permitted-Cross-Domain-Policies=none
+      - traefik.http.middlewares.server-headers.headers.customresponseheaders.Strict-Transport-Security=max-age=15552000; includeSubDomains; preload; always
+    expose:
+      - 3000
+    depends_on:
+      - postgres
+
+  dashboard:
+    image: ghcr.io/rgsystemes/upsignon-docker/dashboard:latest
+    container_name: uso.dashboard
+    pull_policy: always
+    restart: always
+    environment:
+      db_host: postgres
+      db_port: 5432
+      db_name: pro
+      db_user: ${db_user}
+      db_pass: ${db_password}
+      dashboard_session_secret: ${session_secret}
+      pro_dashboard_public_url: https://${dashboard_domain}${dashboard_url_path_prefix}
+      pro_dashboard_port: 3001
+      http_proxy: ${http_proxy}
+      use_postfix: false
+      pro_node_env: production
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.dashboard.loadbalancer.server.port=3001
+      - traefik.http.routers.dashboard.rule=Host(`${dashboard_domain}`) && PathPrefix(`${dashboard_url_path_prefix}`)
+      - traefik.http.routers.dashboard.entrypoints=websecure
+      - traefik.http.routers.dashboard.tls=true
+      - traefik.http.routers.dashboard.middlewares=dashboard-strip,dashboard-ip,dashboard-headers
+      - traefik.http.middlewares.dashboard-strip.stripprefix.prefixes=${dashboard_url_path_prefix}
+      - traefik.http.middlewares.dashboard-ip.ipallowlist.sourcerange=${access_allowed_ips}
+      - traefik.http.middlewares.dashboard-headers.headers.customrequestheaders.X-Real-IP=true
+      - traefik.http.middlewares.dashboard-headers.headers.customrequestheaders.X-Forwarded-Proto=https
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.X-Frame-Options=DENY
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.X-XSS-Protection=1; mode=block
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.X-DNS-Prefetch-Control=off
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.X-Download-Options=noopen
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.X-Permitted-Cross-Domain-Policies=none
+      - traefik.http.middlewares.dashboard-headers.headers.customresponseheaders.Strict-Transport-Security=max-age=15552000; includeSubDomains; preload; always
+    expose:
+      - 3001
+    depends_on:
+      - postgres
+      - server
+
+  traefik:
+    image: traefik:3.6.4
+    container_name: uso.traefik
+    restart: always
+    ports:
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - postgres
+      - server
+      - dashboard
+
+volumes:
+  pgdata:

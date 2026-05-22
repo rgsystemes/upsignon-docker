@@ -69,7 +69,7 @@ fi
 
 # Start Upsignon PRO service
 echo "🚀 Start Upsignon PRO service..."
-if docker compose -f docker-compose-$SSL.yml up -d; then
+if docker compose -f docker-compose.yml -f docker-compose-$SSL.yml up -d; then
 
   # Wait for the service to be ready
   echo "⏳ Initializing services..."
